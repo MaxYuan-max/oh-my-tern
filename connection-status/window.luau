@@ -1,6 +1,9 @@
 --!strict
 local POLL_MS = 5000
 local STALE_MS = 15000
+local RTT_HISTORY = 60
+local RTT_INTERVAL_MS = 10000
+local RTT_MAX_MS = 300
 -- Host names, addresses, tunnel summaries and endpoints belong to this installation, not to the plugin:
 -- they live in plugin-data/connection-status/hosts.json (see hosts.example.json). An empty or missing file
 -- leaves the plugin with no remote hosts rather than guessing one.
@@ -88,6 +91,22 @@ local memoryBusy: { [string]: boolean } = {}
 local memoryAttempted: { [string]: number } = {}
 local refreshMemory: (any) -> ()
 
+type RttRecord = { address: string?, samples: { number }, at: number }
+local rttSamples: { [string]: RttRecord } = {}
+
+-- Host ids stay stable across session switches; a changed address starts a new
+-- history. Pane ids come from Tern unchanged, including remote panes' opaque ids.
+local function rttKey(host: any): string?
+	local id = host.id
+	if type(id) == "number" then
+		return "id:" .. tostring(id)
+	end
+	if type(host.address) == "string" and host.address ~= "" then
+		return "addr:" .. host.address
+	end
+	return nil
+end
+
 local stateNames = {
 	connecting = "连接中",
 	reconnecting = "重连中",
@@ -112,6 +131,7 @@ local function updateHosts(cx: any)
 	hosts = cx.hosts:list()
 	paneHosts = {}
 	labelCounts = {}
+	local seen: { [string]: boolean } = {}
 	for _, host in hosts do
 		for _, pane in host.panes do
 			paneHosts[pane] = host
@@ -119,6 +139,39 @@ local function updateHosts(cx: any)
 		local label = if host.kind == "remote" and host.state == "connected" then logLabel(host) else nil
 		if label then
 			labelCounts[label] = (labelCounts[label] or 0) + 1
+		end
+		if host.kind == "remote" then
+			local key = rttKey(host)
+			if key then
+				seen[key] = true
+				local record = rttSamples[key]
+				if not record or record.address ~= host.address then
+					rttSamples[key] = { address = host.address, samples = {}, at = 0 }
+				end
+			end
+		end
+	end
+	for key in rttSamples do
+		if not seen[key] then
+			rttSamples[key] = nil
+		end
+	end
+end
+
+-- Keep one point per host every 10 s, independent of the 5 s refresh timer.
+-- Missing estimates stay gaps; they are not zero-RTT samples.
+local function sampleRtt(now: number)
+	for _, host in hosts do
+		if host.kind == "remote" and host.state == "connected" and type(host.rtt_ms) == "number" then
+			local key = rttKey(host)
+			local record = if key then rttSamples[key] else nil
+			if record and (#record.samples == 0 or now - record.at >= RTT_INTERVAL_MS) then
+				table.insert(record.samples, math.clamp(host.rtt_ms / RTT_MAX_MS, 0, 1))
+				if #record.samples > RTT_HISTORY then
+					table.remove(record.samples, 1)
+				end
+				record.at = now
+			end
 		end
 	end
 end
@@ -258,6 +311,7 @@ end
 
 local function refresh(cx: any)
 	updateHosts(cx)
+	sampleRtt(tern.now())
 	refreshMemory(cx)
 	redraw()
 	for _, host in hosts do
@@ -1278,26 +1332,54 @@ tern.carly.export("status", {
 end)
 
 -- Widget bar entry (palette › Edit widgets…): `connection-status/rtt`.
--- Formatters see only the pane; its host, RTT and way come from the last updateHosts/probe.
+-- Formatters see only the focused pane; its host comes from updateHosts. Like
+-- hostping, it hides on local panes and keeps a 10-minute RTT history.
 tern.chrome.widget("rtt", {
 	name = "延迟",
-	description = "当前 pane 的实时 RTT；点击切换主机",
+	icon = "gauge",
+	description = "当前 pane 的 Tern 连接 RTT；保留 10 分钟曲线，点击切换主机",
+	styles = { "text", "graph", "bar", "ring" },
 	render = function(pane)
 		if not pane then
 			return nil
 		end
 		local host = paneHosts[pane.pane]
-		if not host then
+		if not host or host.kind ~= "remote" then
 			return nil
 		end
 		local info = view(host)
-		local text = if host.kind == "local" then "0 ms"
-			elseif host.state == "connected" then latency(host) else info.label
+		local text, tone = "…", "muted"
+		if host.state ~= "connected" then
+			text, tone = info.label, "warn"
+		elseif type(host.rtt_ms) == "number" then
+			text = latency(host)
+			tone = if host.rtt_ms < 80 then "success" elseif host.rtt_ms < 200 then "warn" else "error"
+		end
+		local key = rttKey(host)
+		local record = if key then rttSamples[key] else nil
+		local card: { any } = {
+			{ id = "host", label = "Host", text = displayName(host) },
+		}
+		if host.state ~= "connected" then
+			table.insert(card, { id = "state", label = "State", text = info.label, tone = "warn" })
+		elseif type(host.rtt_ms) == "number" then
+			table.insert(card, { id = "rtt", label = "RTT", text = text, tone = if tone == "success" then "ok" else tone })
+		else
+			table.insert(card, { id = "rtt", label = "RTT", text = "measuring…", tone = "muted" })
+		end
+		table.insert(card, {
+			id = "refresh",
+			text = "Tern RTT · 10 s refresh",
+			tone = "muted",
+			actions = { { id = "refresh", label = "Refresh" } },
+		})
 		return {
 			text = text,
-			tone = if host.kind == "remote" and host.state == "connected" and host.rtt_ms and host.rtt_ms > 250 then "warn" else nil,
-			title = if host.kind == "remote" then info.label else nil,
+			tone = tone,
+			card = card,
 			command = "plugin.connection-status.connect",
+			value = if type(host.rtt_ms) == "number" then math.clamp(host.rtt_ms / RTT_MAX_MS, 0, 1) else nil,
+			series = if record then record.samples else nil,
 		}
 	end,
 })
@@ -1337,6 +1419,12 @@ tern.chrome.widget("memory", {
 -- opens Tern's own Task Manager block. Rebuild the card before refreshing so
 -- a pinned or hovered card shows the new row set immediately.
 tern.on("widget_action", function(event, cx)
+	if event.widget == "rtt" and event.row == "refresh" and event.act == "refresh" then
+		updateHosts(cx)
+		sampleRtt(tern.now())
+		redraw()
+		return true
+	end
 	if event.widget ~= "memory" then
 		return false
 	end
