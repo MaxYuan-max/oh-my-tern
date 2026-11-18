@@ -1,0 +1,6 @@
+schema = 1
+id = "hints"
+name = "屏幕提取"
+version = "1.0.0"
+description = "从当前 pane 提取路径、链接和 pi/claude/codex 恢复命令。"
+window = "window.luau"

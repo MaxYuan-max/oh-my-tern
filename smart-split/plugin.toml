@@ -1,0 +1,6 @@
+schema = 1
+id = "smart-split"
+name = "智能分屏"
+version = "1.0.0"
+description = "按当前窗格的实际宽高自动选择分屏方向。"
+window = "window.luau"

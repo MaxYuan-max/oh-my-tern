@@ -1,0 +1,5 @@
+# Per-installation host list; see hosts.example.json.
+hosts.json
+__pycache__/
+*.pyc
+.DS_Store

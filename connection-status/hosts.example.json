@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "tunnel_script": "~/src/tern-ssh-udp/tunnel.py",
+  "container_usage": "~/bin/container-usage",
+  "hosts": [
+    {
+      "name": "build-box",
+      "address": "user@build-box.localhost:18376",
+      "fallback": "user@127.0.0.1:18376",
+      "alias": "build-box.localhost",
+      "port": "18376",
+      "endpoint": "",
+      "detail": "SSH 隧道 → build-box",
+      "tunnel": {
+        "summary": "本地 UDP 18376 经 SSH/TCP 转发至 build-box UDP 8376；不是原生 UDP 直连。",
+        "ssh": "build-box",
+        "target_host": "127.0.0.1",
+        "target_port": 8376,
+        "files": "build-box-ssh-udp",
+        "doctor": "user@build-box.localhost:18376"
+      },
+      "memory": { "ssh": "build-box", "kind": "linux" }
+    },
+    {
+      "name": "container-box",
+      "address": "user@container-box.localhost:28377",
+      "fallback": "user@127.0.0.1:28377",
+      "alias": "container-box.localhost",
+      "port": "28377",
+      "endpoint": "",
+      "detail": "SSH 隧道 → container-box（内网可自动改直连）",
+      "tunnel": {
+        "summary": "本地 UDP 28377 经 build-box 的 SSH/TCP 转发至 container-box UDP 8376。",
+        "ssh": "build-box",
+        "target_host": "10.0.0.9",
+        "target_port": 8376,
+        "files": "container-box-ssh-udp",
+        "doctor": "user@container-box.localhost:28377"
+      },
+      "memory": { "ssh": "container-box", "kind": "container" }
+    }
+  ]
+}
