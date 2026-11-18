@@ -1,0 +1,8 @@
+schema = 1
+id = "hostping"
+name = "Host Latency"
+version = "0.4.0"
+description = "Shows only the selected session's native Tern connection RTT, immediately on session switches. Refreshes every 10s with optional history graphs; no ICMP probes or subprocesses."
+icon = "broadcast"
+window = "window.luau"
+styles = ["widget.css"]
