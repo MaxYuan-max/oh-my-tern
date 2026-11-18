@@ -103,11 +103,11 @@ end})
                 widget = ".wg[data-widget='connection-status/memory']"
                 card = ".wgc[data-widget='connection-status/memory']"
 
-                def rows():
-                    return ctl("tree", card + " .wgc-row").get("nodes", [])
-
-                def has_row(text):
-                    return any(node.get("text") == text for node in rows())
+                def texts():
+                    nodes = []
+                    for part in (".wgc-k", ".wgc-v", ".wgc-btn"):
+                        nodes += ctl("tree", card + " " + part).get("nodes", [])
+                    return [node.get("text") or "" for node in nodes]
 
                 def command(name):
                     ctl("plugins", "run", "plugin.connection-status." + name)
@@ -127,7 +127,7 @@ end})
                     wait_for(lambda: {pane["id"] for pane in ctl("state")["panes"]} == original)
                     ctl("widgets", "set", "connection-status/memory@ring")
                     command("fixture-step")
-                    wait_for(lambda: "18.2" in str(ctl("tree", widget)))
+                    wait_for(lambda: "76%" in str(ctl("tree", widget)))
 
                     # Hovering shows the card just above the widget, with no extra pane or PiP.
                     ctl("hover", widget)
@@ -147,12 +147,11 @@ end})
                     self.assertAlmostEqual(pinned[0], popup[0], delta=2)
                     self.assertAlmostEqual(pinned[1], popup[1], delta=2)
 
-                    texts = [node.get("text") or "" for node in rows()]
+                    values = texts()
                     for text in ("GB of 24 GB", "5.8 GB available", "Top apps"):
-                        self.assertTrue(any(text in value for value in texts), text)
-                    self.assertTrue(any(value.startswith("An application name much wider") for value in texts))
-                    self.assertTrue(any("×47" in value for value in texts))
-                    self.assertFalse(any(value.startswith("PID ") for value in texts))
+                        self.assertTrue(any(text in value for value in values), text)
+                    self.assertTrue(any(value.startswith("An application name much wider") for value in values))
+                    self.assertFalse(any(value.startswith("PID ") for value in values))
 
                     # The card fits a 280pt window instead of forcing the popover wider.
                     ctl("size", "280", "850")

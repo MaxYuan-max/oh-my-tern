@@ -433,7 +433,8 @@ local function memoryBytes(bytes: number): string
 end
 
 local MEMORY_CARD = ".wgc[data-widget='connection-status/memory']"
-local MEMORY_ROW = MEMORY_CARD .. " .wgc-sec > .wgc-row"
+-- Rows Tern generates from a card-less widget's `title` (the unavailable fallback).
+local MEMORY_TITLE_ROW = MEMORY_CARD .. " .wgc-sec > .wgc-row"
 local MEMORY_COLORS = {
 	"rgb(from var(--t1) r g b / 78%)",
 	"rgb(from var(--t1) r g b / 52%)",
@@ -545,185 +546,247 @@ local function memorySplit(parts: { any }, used: number, total: number): string
 	return "linear-gradient(to right, " .. table.concat(stops, ", ") .. ")"
 end
 
--- One native widget card serves both hover and click-to-pin. Its title lines become grid cells.
+-- One native widget card serves both hover and click-to-pin. The card API
+-- yields real label/text nodes; CSS places each row, so the layout no longer
+-- depends on generated title text or character-width guesses.
+local MEMORY_ROW = MEMORY_CARD .. " .wgc-plugin-rows > .wgc-plugin-row"
+
 tern.css("memory-card", [[
 .wgc[data-widget='connection-status/memory'] {
+	position: relative;
 	width: 320px;
 	max-width: calc(100vw - 24px);
+	max-height: calc(100vh - 32px);
+	overflow-y: auto;
+	scrollbar-width: none;
+}
+.wgc[data-widget='connection-status/memory'] .wgc-head {
+	min-height: 38px;
 }
 .wgc[data-widget='connection-status/memory'] .wgc-sec {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	column-gap: 6px;
-	max-height: min(510px, calc(100vh - 100px));
-	overflow-y: auto;
+	padding-top: 0;
+	border-top: 0;
 }
 .wgc[data-widget='connection-status/memory'] .wgc-sec > .wgc-row {
 	grid-column: 1 / 5;
 	min-width: 0;
 }
+.wgc[data-widget='connection-status/memory'] .wgc-plugin-row {
+	padding: 0;
+	background: transparent;
+}
+.wgc[data-widget='connection-status/memory'] .wgc-plugin-row .wgc-k {
+	max-width: none;
+}
 ]])
 
-local function memoryCard(key: string, sample: any): (string, string)
+local function memoryRowRule(rules: { string }, index: number, declarations: string)
+	table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(index) .. ") { " .. declarations .. " }")
+end
+
+local function memoryCellRule(rules: { string }, index: number, selector: string, declarations: string)
+	table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(index) .. ") " .. selector .. " { " .. declarations .. " }")
+end
+
+local function memoryCssString(text: string): string
+	return '"' .. (string.gsub(text, '[\\"]', "\\%0")) .. '"'
+end
+
+-- Card rows are bounded at 200 characters. Cut on a UTF-8 boundary so a long
+-- process name cannot fail the JSON reply.
+local function memoryClip(text: string, limit: number): string
+	if #text <= limit then
+		return text
+	end
+	local cut = limit - 1
+	while cut > 0 and not utf8.len(string.sub(text, 1, cut)) do
+		cut -= 1
+	end
+	return string.sub(text, 1, cut) .. "…"
+end
+
+local function memoryCard(key: string, sample: any): ({ any }, string)
 	local pressure, pressureColor = memoryPressureStyle(sample.pressure, sample.pressure_some_avg10, sample.pressure_full_avg10)
-	local lines, rules = {}, {}
-	local gridRow = 1
-	local function grid(text: string, row: number, column: string, declarations: string?): number
-		table.insert(lines, text)
-		local index = #lines
-		table.insert(rules, string.format("%s:nth-child(%d) { grid-row: %d; grid-column: %s; %s }",
-			MEMORY_ROW, index, row, column, declarations or ""))
+	local rows: { any } = {}
+	local rules: { string } = {}
+	local function push(row: any): number
+		table.insert(rows, row)
+		return #rows
+	end
+	local function style(index: number, declarations: string)
+		memoryRowRule(rules, index, declarations)
+	end
+	local function cell(index: number, selector: string, declarations: string)
+		memoryCellRule(rules, index, selector, declarations)
+	end
+	local function hide(index: number)
+		cell(index, ".wgc-k", "display: none;")
+		cell(index, ".wgc-v", "display: none;")
+	end
+	local function divider(name: string): number
+		local index = push({ id = name, text = "" })
+		style(index, "grid-column: 1 / 5; height: 1px; min-height: 1px; line-height: 1px; margin: 8px -12px 0; background: var(--l1);")
+		hide(index)
 		return index
 	end
-	local function keyStyle(index: number, declarations: string)
-		table.insert(rules, string.format("%s:nth-child(%d) .wgc-k { %s }", MEMORY_ROW, index, declarations))
-	end
-	local function valueStyle(index: number)
-		keyStyle(index, "flex: none; overflow: visible; text-overflow: clip; white-space: nowrap; font: 400 11.5px/20px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1);")
-	end
-	local function labelStyle(index: number)
-		keyStyle(index, "font-size: 11.5px; color: var(--t3);")
-	end
-	local function divider()
-		local index = grid("分隔线", gridRow, "1 / 5", "height: 1px; min-height: 1px; line-height: 1px; margin: 8px -12px 0; background: var(--l1);")
-		keyStyle(index, "display: none;")
-		gridRow += 1
+	local function heading(name: string, label: string, text: string): number
+		local index = push({ id = name, label = label, text = text })
+		style(index, "grid-column: 1 / 5; align-items: center; min-height: 18px; line-height: 18px; margin-top: 8px; margin-bottom: 2px;")
+		cell(index, ".wgc-k", "flex: none; font: 550 11.5px/16px var(--sans); color: var(--t3);")
+		cell(index, ".wgc-v", "flex: 1; overflow: visible; text-align: right; font: 400 11px/16px var(--mono); font-variant-numeric: tabular-nums; color: var(--t4);")
+		return index
 	end
 
-	-- The native summary has one baseline: a large number, small unit/capacity,
-	-- and available memory at the right. A title's "key: value" line becomes
-	-- real .wgc-k/.wgc-v spans, so no generated text or character-width guesses.
-	-- Every host uses the same compact title band. A 20px badge with
-	-- -28px/8px vertical margins occupies no body row: it sits 10px down
-	-- the 38px header. Keep overflow on the outer popover so it is visible.
-	table.insert(rules, MEMORY_CARD .. " { max-height: calc(100vh - 32px); }")
-	table.insert(rules, MEMORY_CARD .. " .wgc-head { min-height: 38px; }")
-	table.insert(rules, MEMORY_CARD .. " .wgc-sec { padding-top: 0; border-top: 0; max-height: none; overflow: visible; }")
-	local pressurePlacement = "justify-self: end; align-self: start; margin: -28px 0 8px;"
+	-- Pressure badge: an absolute row escapes the scrolling section and sits in
+	-- the 38px header band (10px down, 12px from the right), like the built-in.
+	local pressureRow = push({ id = "pressure", label = pressure, text = "" })
+	style(pressureRow, "position: absolute; top: 10px; right: 12px; width: max-content; height: 20px; min-height: 20px; padding: 0 7px; border-radius: 999px; background: var(--l1); line-height: 20px;")
+	cell(pressureRow, ".wgc-k", "flex: none; overflow: visible; white-space: nowrap; font-size: 10px; color: " .. pressureColor .. ";")
+
+	-- Remote identity stays visible; "已用" is implied by the summary below.
+	local subtitle: string? = nil
 	if key ~= "local" then
-		-- Keep remote identity/accounting visible; the redundant "已用" is
-		-- unnecessary because the number below already states used of total.
-		local subtitle = key .. (if sample.scope == "container-cache" then " · 含缓存" else "")
-		local subtitleRow = grid(subtitle, gridRow, "1 / 5", nil)
-		labelStyle(subtitleRow)
+		subtitle = key .. (if sample.scope == "container-cache" then " · 含缓存" else "")
 	end
-	local pressureRow = grid(pressure, gridRow, "1 / 5", pressurePlacement .. " width: max-content; padding: 0 7px; min-height: 20px; line-height: 20px; border-radius: 999px; background: var(--l1);")
-	keyStyle(pressureRow, "flex: none; overflow: visible; white-space: nowrap; font-size: 10px; color: " .. pressureColor .. ";")
-	gridRow += 1
+	local subtitleRow = push({ id = "subtitle", label = if subtitle then memoryClip(subtitle, 200) else "", text = "" })
+	if subtitle then
+		style(subtitleRow, "grid-column: 1 / 5; align-items: center; min-height: 16px; line-height: 16px; margin-bottom: 2px;")
+		cell(subtitleRow, ".wgc-k", "flex: none; font: 400 11.5px/16px var(--sans); color: var(--t3);")
+	else
+		style(subtitleRow, "display: none;")
+	end
+
+	-- Native summary baseline: large used number, small unit/capacity, and
+	-- available memory right-aligned in the non-interactive action button.
 	local usedNumber, usedUnit = string.match(memoryBytes(sample.used_bytes), "^(%S+)%s+(.+)$")
 	local capacity = string.gsub(memoryBytes(sample.total_bytes), "%.0 ", " ")
-	local usedRow = grid(usedNumber .. ": " .. usedUnit .. " of " .. capacity, gridRow, "1 / 5", "justify-self: start; align-self: baseline; width: max-content; gap: 6px; min-height: 28px;")
-	keyStyle(usedRow, "flex: none; overflow: visible; white-space: nowrap; font: 550 24px/28px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.03em; color: var(--t1);")
-	table.insert(rules, string.format("%s:nth-child(%d) .wgc-v { font: 400 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--t3); }", MEMORY_ROW, usedRow))
 	local available = memoryNumber(sample.available_bytes)
-	local availableLabel = if sample.scope == "container-cache" then " headroom" else " available"
-	local availableRow = grid((if available then memoryBytes(available) else "—") .. availableLabel, gridRow, "1 / 5", "justify-self: end; align-self: baseline; width: max-content; min-height: 0; line-height: normal;")
-	keyStyle(availableRow, "flex: none; overflow: visible; white-space: nowrap; font: 400 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--t3);")
-	-- Only narrow viewports stack the available value; the ordinary 320px card
-	-- keeps both sides on the same baseline as Tern's built-in memory card.
-	table.insert(rules, string.format("@media (max-width: 359px) { %s:nth-child(%d) { align-self: start; margin-bottom: 36px; } %s:nth-child(%d) { align-self: end; } }", MEMORY_ROW, usedRow, MEMORY_ROW, availableRow))
-	gridRow += 1
+	local availableLabel = if sample.scope == "container-cache" then "headroom" else "available"
+	local availableText = (if available then memoryBytes(available) else "—") .. " " .. availableLabel
+	local summaryRow = push({
+		id = "summary",
+		label = usedNumber or "—",
+		text = (usedUnit or "B") .. " of " .. capacity,
+		actions = { { id = "noop", label = availableText } },
+	})
+	style(summaryRow, "grid-column: 1 / 5; display: flex; align-items: baseline; gap: 6px; min-height: 28px; line-height: 28px; margin-top: 2px;")
+	cell(summaryRow, ".wgc-k", "flex: none; overflow: visible; white-space: nowrap; font: 550 24px/28px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.03em; color: var(--t1);")
+	cell(summaryRow, ".wgc-v", "flex: none; min-width: 0; overflow: visible; text-align: left; white-space: nowrap; font: 400 11.5px/20px var(--mono); font-variant-numeric: tabular-nums; color: var(--t3);")
+	cell(summaryRow, ".wgc-btn", "margin-left: auto; height: auto; padding: 0; border: 0; border-radius: 0; background: none; font: 400 11.5px/20px var(--mono); font-variant-numeric: tabular-nums; color: var(--t3); pointer-events: none;")
+	table.insert(rules, "@media (max-width: 359px) { " .. MEMORY_ROW .. ":nth-child(" .. tostring(summaryRow) .. ") { flex-wrap: wrap; } "
+		.. MEMORY_ROW .. ":nth-child(" .. tostring(summaryRow) .. ") .wgc-btn { margin-left: 0; width: 100%; text-align: right; } }")
 
-	-- Segmented bar: App, Wired, Compressed, Cached.
+	-- Segmented bar: App, Wired, Compressed, Cached (Linux: Used, Free).
 	local parts = memoryBreakdown(sample.breakdown, sample.used_bytes, sample.total_bytes)
 	if sample.platform == "linux" and sample.scope == "system" then
-		-- Match the native Linux overview without changing its measured bytes.
-		-- "Free" here is MemAvailable, not the narrower /proc MemFree counter.
 		parts = { { id = "used", label = "Used", bytes = sample.used_bytes, included = true } }
 		if available and available <= math.max(0, sample.total_bytes - sample.used_bytes) then
 			table.insert(parts, { id = "available", label = "Free", bytes = available, included = false })
 		end
 	end
-	local bar = grid("内存分布", gridRow, "1 / 5", "height: 8px; min-height: 8px; line-height: 8px; margin: 10px 0 8px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 0.5px var(--l2); background: " .. memorySplit(parts, sample.used_bytes, sample.total_bytes) .. ";")
-	keyStyle(bar, "display: none;")
-	gridRow += 1
-	if #parts == 0 then
-		local missing = grid("分项 —", gridRow, "1 / 5", nil)
-		labelStyle(missing)
-		gridRow += 1
-	else
-		for index, part in parts do
-			local left = index % 2 == 1
-			-- Each legend entry owns its label and right-aligned value. The two
-			-- entries share the row equally, independent of label text length.
-			local inset = if left then "margin-right: 5px;" else "margin-left: 5px;"
-			local label = grid(part.label .. ": " .. memoryBytes(part.bytes), gridRow, if left then "1 / 3" else "3 / 5", "align-items: center; gap: 6px; height: 20px; min-height: 20px; line-height: 20px; " .. inset)
+	local bar = push({ id = "bar", text = "" })
+	style(bar, "grid-column: 1 / 5; height: 8px; min-height: 8px; line-height: 8px; margin: 10px 0 8px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 0.5px var(--l2); background: " .. memorySplit(parts, sample.used_bytes, sample.total_bytes) .. ";")
+	hide(bar)
+
+	-- Four fixed legend slots keep row indices stable; unused slots are hidden.
+	local slots: { any } = {}
+	for index, part in parts do
+		slots[index] = part
+	end
+	if #slots == 0 then
+		slots[1] = { placeholder = true, label = "分项 —" }
+	end
+	for slot = 1, 4 do
+		local part = slots[slot]
+		local index = push({
+			id = "legend-" .. tostring(slot),
+			label = if part then memoryClip(memoryText(part.label, "—"), 200) else "",
+			text = if part and not part.placeholder then memoryBytes(part.bytes) else "",
+		})
+		if not part then
+			style(index, "display: none;")
+		elseif part.placeholder then
+			style(index, "grid-column: 1 / 5; align-items: center; height: 20px; min-height: 20px; line-height: 20px;")
+			cell(index, ".wgc-k", "flex: none; font: 400 11.5px/20px var(--sans); color: var(--t3);")
+			cell(index, ".wgc-v", "display: none;")
+		else
+			local left = slot % 2 == 1
+			style(index, "grid-column: " .. (if left then "1 / 3" else "3 / 5") .. "; align-items: center; gap: 6px; height: 20px; min-height: 20px; line-height: 20px; "
+				.. (if left then "margin-right: 5px;" else "margin-left: 5px;"))
+			cell(index, ".wgc-k", "flex: 1; font: 400 12px/16px var(--sans); color: var(--t3);")
+			cell(index, ".wgc-v", "flex: none; font: 400 11.5px/20px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1);")
 			local outline = if not part.included and part.id ~= "cached" then "box-shadow: inset 0 0 0 0.5px var(--l3);" else ""
-			table.insert(rules, string.format("%s:nth-child(%d)::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 2px; background: %s; %s }", MEMORY_ROW, label, memoryPartColor(index, part), outline))
-			keyStyle(label, "flex: 1; font: 400 12px/16px var(--sans); color: var(--t3);")
-			table.insert(rules, string.format("%s:nth-child(%d) .wgc-v { font: 400 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); }", MEMORY_ROW, label))
-			if not left or index == #parts then
-				gridRow += 1
-			end
+			table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(index) .. ")::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 2px; background: " .. memoryPartColor(slot, part) .. "; " .. outline .. " }")
 		end
 	end
 
-	-- No history chart: keep swap information directly below the breakdown.
+	-- No history chart: swap sits directly below the breakdown.
 	local swapUsed, swapTotal = memoryNumber(sample.swap_used_bytes), memoryNumber(sample.swap_total_bytes)
 	local swap = if not swapUsed and not swapTotal then "—"
 		else (if swapUsed then memoryBytes(swapUsed) else "—") .. " of " .. (if swapTotal then memoryBytes(swapTotal) else "—")
-	local swapLabel = grid("Swap used", gridRow, "1 / 3", nil)
-	labelStyle(swapLabel)
-	local swapValue = grid(swap, gridRow, "3 / 5", "justify-content: end;")
-	valueStyle(swapValue)
-	gridRow += 1
+	local swapRow = push({ id = "swap", label = "Swap used", text = swap })
+	style(swapRow, "grid-column: 1 / 5; align-items: baseline; min-height: 22px; line-height: 22px;")
+	cell(swapRow, ".wgc-k", "flex: 1; font: 400 12px/22px var(--sans); color: var(--t3);")
+	cell(swapRow, ".wgc-v", "flex: none; font: 400 11.5px/22px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); text-align: right;")
 
-	-- Top apps: bundle-grouped, name bright, count dim, RSS bar light gray.
+	local spacer = push({ id = "spacer", text = "" })
+	style(spacer, "grid-column: 1 / 5; height: 6px; min-height: 6px; line-height: 6px;")
+	hide(spacer)
+
+	local processesExpanded = memoryProcessesExpanded[key] == true
 	local count = memoryNumber(sample.process_count)
 	if count and count ~= math.floor(count) then
 		count = nil
 	end
-	local apps = {}
-	if type(sample.apps) == "table" then
-		for _, app in sample.apps do
-			if #apps == 5 then break end
-			if type(app) == "table" then
-				local rss, appCount = memoryNumber(app.rss_bytes), memoryNumber(app.count)
-				if rss and appCount and appCount > 0 and appCount == math.floor(appCount) and type(app.name) == "string" and app.name ~= "" then
-					table.insert(apps, { name = memoryText(app.name, "—"), rss_bytes = rss, count = appCount })
+
+	-- Top apps: bundle-grouped, name bright with a dim count, then the RSS
+	-- gauge and value. Expansion replaces this block so the footer stays in the
+	-- 32-row card budget.
+	if not processesExpanded then
+		divider("divider")
+		local appsHeader = heading("apps", "Top apps", if count then tostring(count) .. " processes" else "—")
+		local apps = {}
+		if type(sample.apps) == "table" then
+			for _, app in sample.apps do
+				if #apps == 5 then break end
+				if type(app) == "table" then
+					local rss, appCount = memoryNumber(app.rss_bytes), memoryNumber(app.count)
+					if rss and appCount and appCount > 0 and appCount == math.floor(appCount) and type(app.name) == "string" and app.name ~= "" then
+						table.insert(apps, { name = memoryClip(memoryText(app.name, "—"), 190), rss_bytes = rss, count = appCount })
+					end
 				end
 			end
 		end
-	end
-	divider()
-	local appsCount = if count then tostring(count) .. " processes" else "—"
-	local appsHeader = grid("Top apps: " .. appsCount, gridRow, "1 / 5", "min-height: 16px; line-height: 16px; margin-top: 8px; margin-bottom: 2px;")
-	keyStyle(appsHeader, "font: 550 11.5px/16px var(--sans); color: var(--t3);")
-	table.insert(rules, string.format("%s:nth-child(%d) .wgc-v { font: 400 11px var(--mono); font-variant-numeric: tabular-nums; color: var(--t4); }", MEMORY_ROW, appsHeader))
-	gridRow += 1
-	local largest = 0
-	for _, app in apps do
-		largest = math.max(largest, app.rss_bytes)
-	end
-	if #apps == 0 then
-		local empty = grid(if count == 0 and type(sample.apps) == "table" then "没有可读进程" else "—", gridRow, "1 / 5", nil)
-		labelStyle(empty)
-		gridRow += 1
-	else
+		local largest = 0
 		for _, app in apps do
-			-- Use the real key/value spans as an inline name/count pair. Giving
-			-- counts their own global grid column aligned them to the longest
-			-- name, unlike the built-in card. Reserve only its fixed 48px gauge,
-			-- 50px RSS column and two 6px gaps on the right.
-			local label = app.name .. (if app.count > 1 then ": ×" .. tostring(app.count) else "")
-			local name = grid(label, gridRow, "1 / 5", "min-height: 22px; line-height: 22px; gap: 6px; padding-right: 110px;")
-			keyStyle(name, "flex: 0 1 auto; font: 400 12px/22px var(--sans); color: var(--t1);")
-			table.insert(rules, string.format("%s:nth-child(%d) .wgc-v { flex: 1; min-width: 0; font: 400 11px var(--mono); font-variant-numeric: tabular-nums; color: var(--t4); }", MEMORY_ROW, name))
-			local percent = if largest > 0 then math.clamp(app.rss_bytes / largest * 100, 0, 100) else 0
-			local color = "rgb(from var(--t1) r g b / 55%)"
-			local gaugeRow = grid("应用占比", gridRow, "1 / 5", "position: relative; justify-self: end; align-self: center; margin-right: 56px; width: 48px; height: 4px; min-height: 4px; line-height: 4px; border-radius: 999px; overflow: hidden; background: var(--l1);")
-			keyStyle(gaugeRow, "display: none;")
-			table.insert(rules, string.format("%s:nth-child(%d)::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: %.3f%%; border-radius: 999px; background: %s; }", MEMORY_ROW, gaugeRow, percent, color))
-			local appValue = grid(memoryBytes(app.rss_bytes), gridRow, "1 / 5", "justify-self: end; align-items: center; min-width: 50px; min-height: 22px; line-height: 22px;")
-			keyStyle(appValue, "flex: 1; overflow: visible; white-space: nowrap; text-align: right; font: 400 11.5px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1);")
-			gridRow += 1
+			largest = math.max(largest, app.rss_bytes)
+		end
+		if #apps == 0 then
+			local empty = push({ id = "apps-empty", label = if count == 0 and type(sample.apps) == "table" then "没有可读进程" else "—", text = "" })
+			style(empty, "grid-column: 1 / 5; align-items: center; min-height: 22px; line-height: 22px;")
+			cell(empty, ".wgc-k", "flex: none; font: 400 11.5px/22px var(--sans); color: var(--t3);")
+			cell(empty, ".wgc-v", "display: none;")
+		else
+			for index, app in apps do
+				local appRow = push({ id = "app-" .. tostring(index), label = app.name, text = memoryBytes(app.rss_bytes) })
+				style(appRow, "grid-column: 1 / 5; position: relative; align-items: center; min-height: 22px; line-height: 22px;")
+				cell(appRow, ".wgc-k", "flex: 1; min-width: 0; font: 400 12px/22px var(--sans); color: var(--t1);")
+				if app.count > 1 then
+					table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(appRow) .. ") .wgc-k::after { content: " .. memoryCssString(" ×" .. tostring(app.count)) .. "; font: 400 11px/22px var(--mono); color: var(--t4); }")
+				end
+				cell(appRow, ".wgc-v", "flex: none; width: 50px; overflow: visible; text-align: right; font: 400 11.5px/22px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1);")
+				local percent = if largest > 0 then math.clamp(app.rss_bytes / largest * 100, 0, 100) else 0
+				table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(appRow) .. ")::after { content: ''; position: absolute; right: 56px; top: 50%; width: 48px; height: 4px; margin-top: -2px; border-radius: 999px; background: linear-gradient(to right, rgb(from var(--t1) r g b / 55%) 0 "
+					.. string.format("%.3f", percent) .. "%, var(--l1) " .. string.format("%.3f", percent) .. "% 100%); }")
+			end
 		end
 	end
 
-	-- Detail visibility is real per-host state, not a hover rule. Remote
-	-- cards start with only the folded heading; local cards keep the native
-	-- overview until the explicit process-details command is requested.
-	local processesExpanded = memoryProcessesExpanded[key] == true
+	-- Process detail is real per-host state. Remote cards keep the folded
+	-- heading; local cards hide it until the palette command asks for details.
 	if key ~= "local" or processesExpanded then
 		local processes = {}
 		if type(sample.processes) == "table" then
@@ -737,65 +800,78 @@ local function memoryCard(key: string, sample: any): (string, string)
 				end
 			end
 		end
+		divider("divider-processes")
+		local shown = math.min(#processes, 18)
 		local processCount = if type(sample.processes) ~= "table" then "—"
+			elseif processesExpanded then tostring(shown) .. (if count then " / " .. tostring(count) else "")
 			elseif count then tostring(#processes) .. " / " .. tostring(count) else tostring(#processes)
-		divider()
-		local processesHeader = grid((if processesExpanded then "▾ " else "▸ ") .. "进程 · RSS: " .. processCount, gridRow, "1 / 5", "min-height: 16px; line-height: 16px; margin-top: 8px; margin-bottom: 2px;")
-		keyStyle(processesHeader, "font: 550 11.5px/16px var(--sans); color: var(--t3);")
-		table.insert(rules, string.format("%s:nth-child(%d) .wgc-v { font: 400 11px var(--mono); color: var(--t4); }", MEMORY_ROW, processesHeader))
-		gridRow += 1
+		local actions = { { id = "toggle-processes", label = if processesExpanded then "收起" else "展开" } }
+		local processHeader = push({ id = "processes", label = "进程", text = processCount, actions = actions })
+		style(processHeader, "grid-column: 1 / 5; align-items: center; min-height: 18px; line-height: 18px; margin-top: 8px; margin-bottom: 2px;")
+		cell(processHeader, ".wgc-k", "flex: none; font: 550 11.5px/16px var(--sans); color: var(--t3);")
+		cell(processHeader, ".wgc-v", "flex: 1; overflow: visible; text-align: right; margin-right: 6px; font: 400 11px/16px var(--mono); font-variant-numeric: tabular-nums; color: var(--t4);")
+		cell(processHeader, ".wgc-btn", "height: 20px; min-height: 20px; padding: 0 7px; border: 0; border-radius: 5px; background: var(--l1); font: 500 10.5px/20px var(--sans); color: var(--t2);")
 		if processesExpanded then
 			if #processes == 0 then
-				local empty = grid(if type(sample.processes) == "table" then "没有可读进程" else memoryText(sample.process_reason, "进程不可用"), gridRow, "1 / 5", nil)
-				labelStyle(empty)
-				gridRow += 1
+				local empty = push({ id = "processes-empty", label = if type(sample.processes) == "table" then "没有可读进程" else memoryText(sample.process_reason, "进程不可用"), text = "" })
+				style(empty, "grid-column: 1 / 5; align-items: center; min-height: 22px; line-height: 22px;")
+				cell(empty, ".wgc-k", "flex: none; font: 400 10.5px/22px var(--sans); color: var(--t4);")
+				cell(empty, ".wgc-v", "display: none;")
 			else
-				for _, process in processes do
-					local name = grid(memoryText(process.name, "—"), gridRow, "1 / 5", "margin-top: 6px;")
-					keyStyle(name, "font-weight: 500; color: var(--t1);")
-					gridRow += 1
-					local number = grid(string.format("PID %.0f   %s", process.pid, memoryBytes(process.rss_bytes)), gridRow, "1 / 5", nil)
-					keyStyle(number, "font: 400 11.5px/16px var(--mono); white-space: pre-wrap; overflow: visible; text-overflow: clip;")
-					gridRow += 1
-					local executable = if type(process.path) == "string" and process.path ~= "" then process.path else "路径不可读"
-					local path = grid((string.gsub(executable, "%c", function(character)
-						return string.format("\\x%02X", string.byte(character))
-					end)), gridRow, "1 / 5", "display: none; height: max-content; min-height: min-content;")
-					keyStyle(path, "display: block; width: 100%; font: 400 11.5px/16px var(--mono); white-space: pre-wrap; word-break: break-all; overflow: visible; text-overflow: clip;")
-					gridRow += 1
-					local nameSelector = MEMORY_ROW .. ":nth-child(" .. tostring(name) .. ")"
-					local numberSelector = MEMORY_ROW .. ":nth-child(" .. tostring(number) .. ")"
-					local pathSelector = MEMORY_ROW .. ":nth-child(" .. tostring(path) .. ")"
-					table.insert(rules, nameSelector .. ":hover + .wgc-row + .wgc-row, " .. numberSelector .. ":hover + .wgc-row, " .. pathSelector .. ":hover { display: block; }")
+				-- One row per process; 18 rows keep a remote card at the 32-row cap.
+				for index = 1, shown do
+					local process = processes[index]
+					local processRow = push({
+						id = "process-" .. tostring(index),
+						label = memoryClip(memoryText(process.name, "—"), 100),
+						text = string.format("PID %.0f · %s", process.pid, memoryBytes(process.rss_bytes)),
+					})
+					style(processRow, "grid-column: 1 / 5; align-items: center; min-height: 22px; line-height: 22px;")
+					cell(processRow, ".wgc-k", "flex: 1; min-width: 0; font: 400 11.5px/22px var(--sans); color: var(--t1);")
+					cell(processRow, ".wgc-v", "flex: none; font: 400 10.5px/22px var(--mono); font-variant-numeric: tabular-nums; color: var(--t4); text-align: right;")
+				end
+				local total = if count then count elseif type(sample.processes) == "table" then #sample.processes else shown
+				local remaining = math.max(0, total - shown)
+				if remaining > 0 then
+					local more = push({ id = "more", label = string.format("还有 %.0f 个进程", remaining), text = "" })
+					style(more, "grid-column: 1 / 5; align-items: center; min-height: 18px; line-height: 18px;")
+					cell(more, ".wgc-k", "flex: none; font: 400 10.5px/18px var(--sans); color: var(--t4);")
+					cell(more, ".wgc-v", "display: none;")
 				end
 			end
 		end
 	end
 
-	-- Match the built-in footer's full-width separator, 40px height and
-	-- right-aligned activity mark. Display the actual sampler cadence.
-	local footer = grid(string.format("Updated every %g s: Task manager", POLL_MS / 1000), gridRow, "1 / 5", "align-items: center; gap: 8px; min-height: 24px; line-height: 16px; margin: 8px -12px -8px; padding: 7px 14px 8px 12px; border-top: 1px solid var(--l1);")
-	keyStyle(footer, "flex: 1; font: 400 11.5px/16px var(--sans); color: var(--t3);")
-	local footerValue = string.format("%s:nth-child(%d) .wgc-v", MEMORY_ROW, footer)
-	table.insert(rules, footerValue .. " { display: inline-flex; align-items: center; gap: 5px; height: 24px; font: 500 12px/16px var(--sans); color: var(--t2); }")
+	-- Full-width divider, 40px band and the native activity mark on the right.
+	local footer = push({
+		id = "footer",
+		label = string.format("Updated every %g s", POLL_MS / 1000),
+		text = "",
+		actions = { { id = "task-manager", label = "Task manager" } },
+	})
+	style(footer, "grid-column: 1 / 5; display: flex; align-items: center; gap: 8px; min-height: 40px; line-height: 16px; margin: 8px -12px -8px; padding: 7px 14px 8px 12px; border-top: 1px solid var(--l1);")
+	cell(footer, ".wgc-k", "flex: 1; font: 400 11.5px/16px var(--sans); color: var(--t3);")
+	cell(footer, ".wgc-v", "display: none;")
+	cell(footer, ".wgc-btn", "display: inline-flex; align-items: center; gap: 5px; height: 24px; min-height: 24px; padding: 0; border: 0; background: none; font: 500 12px/16px var(--sans); color: var(--t2);")
 	local function activityIcon(color: string): string
 		return tern.base64.encode("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1.75 8.5h2.5l1.75-4.75 3 8.5 1.75-3.75h3.5' fill='none' stroke='" .. color .. "' stroke-width='1.45' stroke-linecap='round' stroke-linejoin='round'/></svg>")
 	end
-	-- URL masks are not painted by this Tern renderer; an SVG background is.
-	table.insert(rules, footerValue .. "::before { content: ''; flex: none; width: 13px; height: 13px; background-image: url(\"data:image/svg+xml;base64," .. activityIcon("#adb1b9") .. "\"); background-size: 100% 100%; background-repeat: no-repeat; }")
-	table.insert(rules, "@media (prefers-color-scheme: light) { " .. footerValue .. "::before { background-image: url(\"data:image/svg+xml;base64," .. activityIcon("#5e626b") .. "\"); } }")
-	return table.concat(lines, "\n"), table.concat(rules, "\n")
+	table.insert(rules, MEMORY_ROW .. ":nth-child(" .. tostring(footer) .. ") .wgc-btn::before { content: ''; flex: none; width: 13px; height: 13px; background-image: url(\"data:image/svg+xml;base64," .. activityIcon("#adb1b9") .. "\"); background-size: 100% 100%; background-repeat: no-repeat; }")
+	table.insert(rules, "@media (prefers-color-scheme: light) { " .. MEMORY_ROW .. ":nth-child(" .. tostring(footer) .. ") .wgc-btn::before { background-image: url(\"data:image/svg+xml;base64," .. activityIcon("#5e626b") .. "\"); } }")
+
+	return rows, table.concat(rules, "\n")
 end
 
+-- Card-less fallback (no focused host or no sample): style the title's three
+-- lines as host, pressure badge and reason.
 local memoryDefaultCss = string.format([[
 %s:first-child { grid-row: 1; grid-column: 1 / 3; }
 %s:last-child { grid-row: 2; grid-column: 1 / 5; }
 %s:nth-child(2) { grid-row: 1; grid-column: 3 / 5; justify-self: end; align-self: center; padding: 0 7px; min-height: 20px; line-height: 20px; border-radius: 999px; background: var(--l1); }
 %s:nth-child(2) .wgc-k { flex: none; overflow: visible; white-space: nowrap; font-size: 10px; color: var(--t3); }
-]], MEMORY_ROW, MEMORY_ROW, MEMORY_ROW, MEMORY_ROW)
+]], MEMORY_TITLE_ROW, MEMORY_TITLE_ROW, MEMORY_TITLE_ROW, MEMORY_TITLE_ROW)
 local memoryAppliedCss: string? = nil
-local function applyMemoryStyle(sample: any)
-	local style = if sample then sample.css else memoryDefaultCss
+local function applyMemoryStyle(style: string)
 	if style ~= memoryAppliedCss then
 		tern.css("memory-data", style)
 		memoryAppliedCss = style
@@ -806,9 +882,10 @@ end
 local function syncMemoryStyle(cx: any)
 	local focused = cx.session:focused()
 	local host = if focused then paneHosts[focused] else nil
-	applyMemoryStyle(if host then currentMemory(host) else nil)
+	local sample = if host then currentMemory(host) else nil
+	applyMemoryStyle(if sample then sample.css else memoryDefaultCss)
 end
-applyMemoryStyle(nil)
+applyMemoryStyle(memoryDefaultCss)
 
 
 local function nonemptyMemoryEnv(name: string): string?
@@ -906,7 +983,7 @@ local function sampleMemory(host: any)
 					process_count = answer.process_count,
 					process_reason = answer.process_reason,
 				}
-				sample.title, sample.css = memoryCard(key, sample)
+				sample.card, sample.css = memoryCard(key, sample)
 				memoryReadings[key] = sample
 			else
 				memoryReadings[key] = {
@@ -962,7 +1039,7 @@ tern.command({
 			return
 		end
 		memoryProcessesExpanded[key] = not memoryProcessesExpanded[key]
-		sample.title, sample.css = memoryCard(key, sample)
+		sample.card, sample.css = memoryCard(key, sample)
 		syncMemoryStyle(cx)
 		redraw()
 		showMemoryCard(cx)
@@ -1234,6 +1311,7 @@ tern.css("memory-colors", [[
 
 tern.chrome.widget("memory", {
 	name = "内存",
+	icon = "memory",
 	description = "当前主机内存与进程占用；悬停查看，点击固定卡片",
 	styles = { "ring", "bar", "text" },
 	render = function(pane)
@@ -1249,10 +1327,40 @@ tern.chrome.widget("memory", {
 				elseif sample.ratio >= 0.9 then "error"
 				elseif sample.ratio >= 0.7 then "warn"
 				else "ok",
-			title = if sample then sample.title else memoryText(displayName(host), "未知主机") .. "\n● 未知\n内存不可用",
+			card = if sample then sample.card else nil,
+			title = if sample then nil else memoryText(displayName(host), "未知主机") .. "\n● 未知\n内存不可用",
 		}
 	end,
 })
+
+-- Card buttons: the process heading toggles details in place; the footer
+-- opens Tern's own Task Manager block. Rebuild the card before refreshing so
+-- a pinned or hovered card shows the new row set immediately.
+tern.on("widget_action", function(event, cx)
+	if event.widget ~= "memory" then
+		return false
+	end
+	if event.act == "toggle-processes" then
+		updateHosts(cx)
+		local focused = cx.session:focused()
+		local host = if focused then paneHosts[focused] else nil
+		local key = if host then memoryKey(host) else nil
+		local sample = if host then currentMemory(host) else nil
+		if key and sample then
+			memoryProcessesExpanded[key] = not memoryProcessesExpanded[key]
+			sample.card, sample.css = memoryCard(key, sample)
+			syncMemoryStyle(cx)
+			redraw()
+		end
+		return true
+	elseif event.act == "task-manager" then
+		cx:command("new_task_manager_block")
+		return true
+	elseif event.act == "noop" then
+		return true
+	end
+	return false
+end)
 
 for _, event in { "focus", "pane_created", "pane_closed", "tab_created", "tab_closed" } do
 	tern.on(event, function(_event, cx)
