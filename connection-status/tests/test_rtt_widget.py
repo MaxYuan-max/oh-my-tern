@@ -1,4 +1,4 @@
-"""The RTT widget's hostping behaviour, in an isolated Tern window.
+"""The RTT widget's host-latency behaviour, in an isolated Tern window.
 
 Covers the pane→host resolver, local-pane hiding, tone thresholds, RTT history,
 the structured Refresh card and its button.
@@ -59,6 +59,9 @@ tern.command({id="fixture-rtt",title="Remote RTT fixture",run=function(cx)
 end})
 tern.command({id="fixture-rtt-bump",title="Change RTT",run=function()
     if __rtt_host then __rtt_host.rtt_ms = 250 end
+end})
+tern.command({id="fixture-rtt-bump-error",title="Change RTT past warning",run=function()
+    if __rtt_host then __rtt_host.rtt_ms = 350 end
 end})
 tern.command({id="fixture-rtt-local",title="Local RTT fixture",run=function(cx)
     __rtt_host = { id=4243, kind="local", state="connected", name="fixture-local", address="" }
@@ -128,9 +131,9 @@ end})
                     ctl("widgets", "set", "connection-status/rtt@graph")
                     command("fixture-rtt")
                     wait_for(lambda: "95 ms" in str(ctl("tree", widget)))
-                    self.assertEqual(ctl("tree", widget + "[data-tone='warn']")["count"], 1)
+                    self.assertEqual(ctl("tree", widget + "[data-tone='success']")["count"], 1)
 
-                    # A local pane hides the widget, matching hostping.
+                    # A local pane hides the widget, matching the standalone one.
                     command("fixture-rtt-local")
                     wait_for(lambda: ctl("tree", widget)["count"] == 0)
                     command("fixture-rtt")
@@ -149,7 +152,7 @@ end})
                     self.assertIn("95 ms", values)
                     self.assertTrue(any("Tern RTT · 10 s refresh" in value for value in values), values)
                     self.assertEqual(buttons, ["Refresh"])
-                    self.assertEqual(ctl("tree", card + " .wgc-plugin-row[data-tone='warn']")["count"], 1)
+                    self.assertEqual(ctl("tree", card + " .wgc-plugin-row[data-tone='ok']")["count"], 1)
 
                     # History: the first sample is 95/300; forcing the 10 s
                     # interval adds a second one.
@@ -163,10 +166,15 @@ end})
                     self.assertEqual(stats["count"], 2)
 
                     # The card's Refresh re-reads hosts and redraws in place;
-                    # the tone crosses into error at 250 ms.
+                    # 250 ms is the warn band and 350 ms crosses into error.
                     command("fixture-rtt-bump")
                     ctl("click", card + " .wgc-plugin-row:nth-child(3) .wgc-btn")
                     wait_for(lambda: "250 ms" in str(ctl("tree", card)))
+                    self.assertEqual(ctl("tree", widget + "[data-tone='warn']")["count"], 1)
+                    self.assertEqual(ctl("tree", card + " .wgc-plugin-row[data-tone='warn']")["count"], 1)
+                    command("fixture-rtt-bump-error")
+                    ctl("click", card + " .wgc-plugin-row:nth-child(3) .wgc-btn")
+                    wait_for(lambda: "350 ms" in str(ctl("tree", card)))
                     self.assertEqual(ctl("tree", widget + "[data-tone='error']")["count"], 1)
                     self.assertEqual(ctl("tree", card)["count"], 1)
                 finally:

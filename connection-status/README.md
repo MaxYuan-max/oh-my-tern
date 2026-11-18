@@ -35,7 +35,9 @@
 
 ## 版本记录
 
-1.16.0：**延迟**组件吸收 hostping 的展示方式：本机 pane 不再显示 `0 ms`；远端按 80/200 ms 分为 success／warn／error；每台远端保留最近 10 分钟、60 个 10 秒采样点，供 graph 样式绘制；悬停卡改为 Host／RTT／刷新提示加 Refresh 按钮，点击 Refresh 重新读取 Tern 当前连接估计。仍不额外探测，点击 widget 本身继续打开主机切换；RTT 解析仍只读 `cx.hosts:list()`，不经过 `hosts.json`。新增隔离窗口测试覆盖远程解析、本机隐藏、阈值、历史、卡片和 Refresh。
+1.16.1：**延迟**组件的颜色阈值改为 `<150 ms` success、`<300 ms` warn、`300 ms` 及以上 error；graph／bar／ring 仍按 300 ms 满格归一化。原先独立的延迟插件由本组件取代并从仓库移除。
+
+1.16.0：**延迟**组件吸收独立延迟组件的展示方式：本机 pane 不再显示 `0 ms`；远端按 80/200 ms 分为 success／warn／error；每台远端保留最近 10 分钟、60 个 10 秒采样点，供 graph 样式绘制；悬停卡改为 Host／RTT／刷新提示加 Refresh 按钮，点击 Refresh 重新读取 Tern 当前连接估计。仍不额外探测，点击 widget 本身继续打开主机切换；RTT 解析仍只读 `cx.hosts:list()`，不经过 `hosts.json`。新增隔离窗口测试覆盖远程解析、本机隐藏、阈值、历史、卡片和 Refresh。
 
 1.15.0：内存卡片改用 Tern 0.9.27 的结构化 widget `card` API，不再把整张布局拼进 `title` 文本。每行仍是原生 `.wgc-row.wgc-plugin-row`，但摘要、双列图例、Top apps 仪表和 40px 页脚由真实 label/text/按钮节点加逐行 CSS 呈现；压力徽章落在 38px 标题带内。进程详情默认收起，点卡片里的“展开”就地切换；最多显示 18 条单行进程并注明“还有 N 个进程”，展开时用进程区替换 Top apps，保证 32 行上限内页脚仍在最后。“Task manager”是真实卡片按钮，调用内置 `new_task_manager_block`。隔离回归改为直接断言 card 行、按钮动作、字体／基线／列位置、折叠与展开顺序及 280pt 窄宽，不再读取旧 title 文本。
 

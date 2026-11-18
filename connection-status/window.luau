@@ -1333,7 +1333,8 @@ end)
 
 -- Widget bar entry (palette › Edit widgets…): `connection-status/rtt`.
 -- Formatters see only the focused pane; its host comes from updateHosts. Like
--- hostping, it hides on local panes and keeps a 10-minute RTT history.
+-- the standalone host-latency widget, it hides on local panes and keeps a
+-- 10-minute RTT history.
 tern.chrome.widget("rtt", {
 	name = "延迟",
 	icon = "gauge",
@@ -1353,7 +1354,7 @@ tern.chrome.widget("rtt", {
 			text, tone = info.label, "warn"
 		elseif type(host.rtt_ms) == "number" then
 			text = latency(host)
-			tone = if host.rtt_ms < 80 then "success" elseif host.rtt_ms < 200 then "warn" else "error"
+			tone = if host.rtt_ms < 150 then "success" elseif host.rtt_ms < 300 then "warn" else "error"
 		end
 		local key = rttKey(host)
 		local record = if key then rttSamples[key] else nil
