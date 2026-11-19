@@ -353,6 +353,8 @@ end
 tern.command({
 	id = "details",
 	title = "查看当前连接方式",
+	-- Palette-only visibility: the action stays dispatchable by keybind/action.
+	available = function(_cx) return false end,
 	run = function(cx)
 		-- Always on a fresh reading. A probe that cannot start answers with no cx; `cx` is only live until run returns.
 		local sync = true
@@ -392,6 +394,7 @@ end
 tern.command({
 	id = "recover-ssh",
 	title = "检查并恢复当前主机 SSH 隧道",
+	available = function(_cx) return false end,
 	run = function(cx)
 		updateHosts(cx)
 		local focused = cx.session:focused()
@@ -417,6 +420,7 @@ tern.command({
 tern.command({
 	id = "hosts-config",
 	title = "查看主机配置状态",
+	available = function(_cx) return false end,
 	run = function(cx)
 		if hostConfigError then
 			cx:toast("error", "主机配置无法读取", HOST_CONFIG_PATH .. "\n" .. hostConfigError)
@@ -1074,6 +1078,7 @@ end
 tern.command({
 	id = "memory-details",
 	title = "查看内存占用",
+	available = function(_cx) return false end,
 	run = function(cx)
 		showMemoryCard(cx)
 	end,
@@ -1082,6 +1087,7 @@ tern.command({
 tern.command({
 	id = "memory-processes",
 	title = "展开／收起内存进程",
+	available = function(_cx) return false end,
 	run = function(cx)
 		updateHosts(cx)
 		local focused = cx.session:focused()

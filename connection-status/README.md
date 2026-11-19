@@ -35,7 +35,7 @@
 
 ## 版本记录
 
-1.16.3：**内存**组件的图标改用有效的 `ram`（内存条）；原先写的 `memory` 不在 Tern 的图标集里，Tern 不报错也不绘制，悬停卡与 widget 前就没有图标。
+1.16.3：**内存**组件的图标改用有效的 `ram`（内存条）；原先写的 `memory` 不在 Tern 的图标集里，Tern 不报错也不绘制，悬停卡与 widget 前就没有图标。命令面板只保留 **连接主机（本机 / 已配置远端）**：查看连接方式、检查并恢复 SSH 隧道、查看主机配置状态、查看内存占用、展开／收起内存进程改为 `available = false`，不再出现在面板里；action 名不变，仍可通过 keybind 或 `plugin.connection-status.*` 调用。
 
 1.16.2：支持无 SSH 隧道的直连主机。`hosts.json` 条目可以省略 `tunnel`；连接器不再先跑 `recover_tunnel.py`，picker 显示“选择后直连”。适用于 UDP 端口可跨 VPN 直达的主机（例如 7709），内存采样仍走各自的 `memory.ssh`。
 

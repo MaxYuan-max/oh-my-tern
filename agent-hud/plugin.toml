@@ -1,6 +1,6 @@
 schema = 1
 id = "agent-hud"
 name = "Agents 面板"
-version = "0.1.0"
+version = "0.1.1"
 description = "复刻原生 Agents HUD：悬浮面板列出各窗格里的 agent（状态、时长、位置），点击跳转，可新建 agent。"
 window = "window.luau"

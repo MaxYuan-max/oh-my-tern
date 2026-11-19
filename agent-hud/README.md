@@ -34,3 +34,4 @@ tern plugin install github.com/MaxYuan-max/oh-my-tern/agent-hud
 - 行点击：行是 `el("div", { actions = { click = "go=<pane>" } })`，经 `canvas_action` 事件分发，`go=<pane>` 触发 `layout:focus(pane)` 并关闭卡片。
 - 刷新：`agent_state` / `agent_finished` / `pane_*` / `focus` 事件 + 2 s 定时器重建 view，`tern.chrome.refresh()` 同步小组件。
 - 空状态：没有运行中的 agent 时显示"没有运行中的 agent"，底部按钮可直接新建。
+- 命令面板：`Agents 面板` 命令默认 `available = false`，不占面板行；需要时在 `settings.json` 的 `keybinds` 绑定 `plugin.agent-hud.toggle`。

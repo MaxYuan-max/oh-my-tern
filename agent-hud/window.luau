@@ -580,6 +580,7 @@ tern.command({
 	id = "toggle",
 	title = "Agents 面板",
 	icon = "sparkle",
+	available = function(_cx) return false end,
 	run = toggleHud,
 })
 
