@@ -35,6 +35,8 @@
 
 ## 版本记录
 
+1.16.3：**内存**组件的图标改用有效的 `ram`（内存条）；原先写的 `memory` 不在 Tern 的图标集里，Tern 不报错也不绘制，悬停卡与 widget 前就没有图标。
+
 1.16.2：支持无 SSH 隧道的直连主机。`hosts.json` 条目可以省略 `tunnel`；连接器不再先跑 `recover_tunnel.py`，picker 显示“选择后直连”。适用于 UDP 端口可跨 VPN 直达的主机（例如 7709），内存采样仍走各自的 `memory.ssh`。
 
 1.16.1：**延迟**组件的颜色阈值改为 `<150 ms` success、`<300 ms` warn、`300 ms` 及以上 error；graph／bar／ring 仍按 300 ms 满格归一化。原先独立的延迟插件由本组件取代并从仓库移除。

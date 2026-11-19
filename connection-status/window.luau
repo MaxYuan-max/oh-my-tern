@@ -1395,7 +1395,7 @@ tern.css("memory-colors", [[
 
 tern.chrome.widget("memory", {
 	name = "内存",
-	icon = "memory",
+	icon = "ram",
 	description = "当前主机内存与进程占用；悬停查看，点击固定卡片",
 	styles = { "ring", "bar", "text" },
 	render = function(pane)
