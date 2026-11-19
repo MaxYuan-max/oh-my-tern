@@ -1213,8 +1213,8 @@ local function connectTarget(cx: any, target: any, checked: boolean)
 			pending = pending or host
 		end
 	end
-	if not checked then
-		-- SSH reaches the host only with the VPN up: without it the check says so and changes nothing.
+	if not checked and target.tunnel then
+		-- SSH reaches tunneled hosts only with the VPN up: without it the check says so and changes nothing.
 		recoverTunnel(cx, target.name, function(ok, output, doneCx)
 			if not ok then
 				doneCx:toast("error", target.name .. " 隧道不可用，未连接", output)
@@ -1249,7 +1249,7 @@ local function connectTarget(cx: any, target: any, checked: boolean)
 		end
 	end
 	if not address then
-		cx:toast("error", target.name .. " 未重连", target.address .. " 本身正走中继，且没有备用隧道地址；未断开")
+		cx:toast("error", target.name .. " 未重连", target.address .. " 本身正走中继，且没有备用地址；未断开")
 		return
 	end
 	dial(cx, target, address, relayed)
@@ -1282,9 +1282,10 @@ tern.command({
 				end
 			end
 			local state = if connected then brief(view(connected)) .. " · 选择后切换"
-				elseif relayed then "中继 · " .. latency(relayed) .. " · 选择后检查隧道，换到隧道并断开中继"
-				elseif pending then view(pending).label .. " · 选择后检查隧道并切换"
-				else "未连接 · 选择后检查隧道并连接"
+				elseif relayed then "中继 · " .. latency(relayed) .. " · 选择后" .. (if target.tunnel then "检查隧道，换到隧道并断开中继" else "直连并断开中继")
+				elseif pending then view(pending).label .. " · 选择后切换"
+				elseif target.tunnel then "未连接 · 选择后检查隧道并连接"
+				else "未连接 · 选择后直连"
 			-- Way and RTT first: the picker cuts the dim detail off at the row's end.
 			table.insert(items, { label = target.name, detail = state .. " · " .. target.detail, group = "主机", target_name = target.name, current = isCurrent })
 		end

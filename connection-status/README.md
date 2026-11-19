@@ -26,7 +26,7 @@
 | `alias`、`port` | 把 `127.0.0.1:端口`、别名和 endpoint ID 认作同一台机器。 |
 | `endpoint` | 可选，64 位 endpoint ID；用于识别以 ID 连接的同一条目。 |
 | `detail` | **连接主机** 列表里的说明。 |
-| `tunnel` | 可选，自动恢复隧道所需。`summary` 是路径说明；`ssh`、`target_host`、`target_port`、`files`、`doctor` 交给 `recover_tunnel.py`。省略则只能手动修复隧道。 |
+| `tunnel` | 可选，自动恢复隧道所需。`summary` 是路径说明；`ssh`、`target_host`、`target_port`、`files`、`doctor` 交给 `recover_tunnel.py`。省略表示该主机直接走 UDP，连接器不会检查或启动 SSH 隧道。 |
 | `memory` | 可选，内存采样所需。`ssh` 是采集用的 SSH 目标；`kind` 为 `container`（cgroup 计费，含缓存）或 `linux`（`/proc/meminfo`）。省略则该主机不显示内存。 |
 
 顶层 `tunnel_script`（默认 `~/src/tern-ssh-udp/tunnel.py`）和 `container_usage`
@@ -34,6 +34,8 @@
 仓库只含示例；配置里找不到的主机不会被当作本机采样。
 
 ## 版本记录
+
+1.16.2：支持无 SSH 隧道的直连主机。`hosts.json` 条目可以省略 `tunnel`；连接器不再先跑 `recover_tunnel.py`，picker 显示“选择后直连”。适用于 UDP 端口可跨 VPN 直达的主机（例如 7709），内存采样仍走各自的 `memory.ssh`。
 
 1.16.1：**延迟**组件的颜色阈值改为 `<150 ms` success、`<300 ms` warn、`300 ms` 及以上 error；graph／bar／ring 仍按 300 ms 满格归一化。原先独立的延迟插件由本组件取代并从仓库移除。
 
