@@ -27,13 +27,15 @@
 | `endpoint` | 可选，64 位 endpoint ID；用于识别以 ID 连接的同一条目。 |
 | `detail` | **连接主机** 列表里的说明。 |
 | `tunnel` | 可选，自动恢复隧道所需。`summary` 是路径说明；`ssh`、`target_host`、`target_port`、`files`、`doctor` 交给 `recover_tunnel.py`。省略表示该主机直接走 UDP，连接器不会检查或启动 SSH 隧道。 |
-| `memory` | 可选，内存采样所需。`ssh` 是采集用的 SSH 目标；`kind` 为 `container`（cgroup 计费，含缓存）或 `linux`（`/proc/meminfo`）。省略则该主机不显示内存。 |
+| `memory` | 可选，内存采样所需。`ssh` 是采集用的 SSH 目标；`kind` 为 `container`（cgroup v1 配额与工作集估算）或 `linux`（`/proc/meminfo`）。省略则该主机不显示内存。 |
 
 顶层 `tunnel_script`（默认 `~/src/tern-ssh-udp/tunnel.py`）和 `container_usage`
 （默认 `~/bin/container-usage`）可覆盖辅助脚本位置。`hosts.json` 已被 `.gitignore` 忽略，
 仓库只含示例；配置里找不到的主机不会被当作本机采样。
 
 ## 版本记录
+
+1.16.4：容器底栏按 `docker stats` 的 cgroup v1 口径用「计费用量减 `total_inactive_file`」估算工作集，百分比、仪表填充和颜色使用同一比例。卡片保留含缓存的计费用量与未用配额（`headroom`），另列工作集与估算可用量；非活跃文件缓存计数缺失或无法可靠相减时，估算行显示 `—`，底栏回退到含缓存用量。普通 Linux 的 `MemAvailable` 口径和 macOS 不变。
 
 1.16.3：**内存**组件的图标改用有效的 `ram`（内存条）；原先写的 `memory` 不在 Tern 的图标集里，Tern 不报错也不绘制，悬停卡与 widget 前就没有图标。命令面板只保留 **连接主机（本机 / 已配置远端）**：查看连接方式、检查并恢复 SSH 隧道、查看主机配置状态、查看内存占用、展开／收起内存进程改为 `available = false`，不再出现在面板里；action 名不变，仍可通过 keybind 或 `plugin.connection-status.*` 调用。
 

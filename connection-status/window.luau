@@ -782,17 +782,29 @@ local function memoryCard(key: string, sample: any): ({ any }, string)
 	end
 
 	-- No history chart: swap sits directly below the breakdown.
+	local function amountRow(id: string, label: string, text: string)
+		local index = push({ id = id, label = label, text = text })
+		style(index, "grid-column: 1 / 5; align-items: baseline; min-height: 22px; line-height: 22px;")
+		cell(index, ".wgc-k", "flex: 1; font: 400 12px/22px var(--sans); color: var(--t3);")
+		cell(index, ".wgc-v", "flex: none; font: 400 11.5px/22px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); text-align: right;")
+	end
 	local swapUsed, swapTotal = memoryNumber(sample.swap_used_bytes), memoryNumber(sample.swap_total_bytes)
 	local swap = if not swapUsed and not swapTotal then "—"
 		else (if swapUsed then memoryBytes(swapUsed) else "—") .. " of " .. (if swapTotal then memoryBytes(swapTotal) else "—")
-	local swapRow = push({ id = "swap", label = "Swap used", text = swap })
-	style(swapRow, "grid-column: 1 / 5; align-items: baseline; min-height: 22px; line-height: 22px;")
-	cell(swapRow, ".wgc-k", "flex: 1; font: 400 12px/22px var(--sans); color: var(--t3);")
-	cell(swapRow, ".wgc-v", "flex: none; font: 400 11.5px/22px var(--mono); font-variant-numeric: tabular-nums; color: var(--t1); text-align: right;")
+	amountRow("swap", "Swap used", swap)
 
-	local spacer = push({ id = "spacer", text = "" })
-	style(spacer, "grid-column: 1 / 5; height: 6px; min-height: 6px; line-height: 6px;")
-	hide(spacer)
+	if sample.scope == "container-cache" then
+		-- Use the spacer's row slot so the expanded card still fits 32 rows.
+		-- Keep the charged summary, bar and quota headroom above unmodified.
+		local workingSet = sample.working_set_bytes
+		local estimate = if workingSet then memoryBytes(workingSet) .. " · "
+			.. memoryBytes(math.max(sample.total_bytes - workingSet, 0)) .. " 可用" else "—"
+		amountRow("working-set", "工作集（估算）", estimate)
+	else
+		local spacer = push({ id = "spacer", text = "" })
+		style(spacer, "grid-column: 1 / 5; height: 6px; min-height: 6px; line-height: 6px;")
+		hide(spacer)
+	end
 
 	local processesExpanded = memoryProcessesExpanded[key] == true
 	local count = memoryNumber(sample.process_count)
@@ -1004,6 +1016,43 @@ local function retireMemoryPanels(cx: any)
 	end
 end
 
+local function memorySample(key: string, answer: any): any
+	local used, total = memoryNumber(answer.used_bytes), memoryNumber(answer.total_bytes)
+	if not used or not total or total == 0 then
+		return nil
+	end
+	local workingSet = if answer.scope == "container-cache" then memoryNumber(answer.working_set_bytes) else nil
+	if workingSet and workingSet > used then
+		workingSet = nil
+	end
+	-- The widget's text, meter and tone use the same estimate. The card's
+	-- charged breakdown still uses used_bytes and available_bytes from the probe.
+	local ratio = (workingSet or used) / total
+	local sample = {
+		checked = tern.now(),
+		used_bytes = used,
+		total_bytes = total,
+		available_bytes = answer.available_bytes,
+		working_set_bytes = workingSet,
+		text = string.format("%.0f%%", ratio * 100),
+		ratio = ratio,
+		scope = answer.scope,
+		platform = answer.platform,
+		breakdown = answer.breakdown,
+		pressure = answer.pressure,
+		pressure_some_avg10 = answer.pressure_some_avg10,
+		pressure_full_avg10 = answer.pressure_full_avg10,
+		swap_used_bytes = answer.swap_used_bytes,
+		swap_total_bytes = answer.swap_total_bytes,
+		apps = answer.apps,
+		processes = if type(answer.processes) == "table" then answer.processes else nil,
+		process_count = answer.process_count,
+		process_reason = answer.process_reason,
+	}
+	sample.card, sample.css = memoryCard(key, sample)
+	return sample
+end
+
 local function sampleMemory(host: any)
 	local key = memoryKey(host)
 	local now = tern.now()
@@ -1017,31 +1066,8 @@ local function sampleMemory(host: any)
 		tern.process.run({ "/usr/bin/python3", MEMORY_PROBE, key }, { timeout_ms = 10000 }, function(process, cx)
 			memoryBusy[key] = nil
 			local decoded, answer = pcall(tern.json.decode, process.stdout)
-			local used = if decoded and type(answer) == "table" then memoryNumber(answer.used_bytes) else nil
-			local total = if decoded and type(answer) == "table" then memoryNumber(answer.total_bytes) else nil
-			if process.status == 0 and used and total and total > 0 then
-				local checked = tern.now()
-				local sample = {
-					checked = checked,
-					used_bytes = used,
-					total_bytes = total,
-					available_bytes = answer.available_bytes,
-					text = string.format("%.0f%%", used / total * 100),
-					ratio = used / total,
-					scope = answer.scope,
-					platform = answer.platform,
-					breakdown = answer.breakdown,
-					pressure = answer.pressure,
-					pressure_some_avg10 = answer.pressure_some_avg10,
-					pressure_full_avg10 = answer.pressure_full_avg10,
-					swap_used_bytes = answer.swap_used_bytes,
-					swap_total_bytes = answer.swap_total_bytes,
-					apps = answer.apps,
-					processes = if type(answer.processes) == "table" then answer.processes else nil,
-					process_count = answer.process_count,
-					process_reason = answer.process_reason,
-				}
-				sample.card, sample.css = memoryCard(key, sample)
+			local sample = if process.status == 0 and decoded and type(answer) == "table" then memorySample(key, answer) else nil
+			if sample then
 				memoryReadings[key] = sample
 			else
 				memoryReadings[key] = {

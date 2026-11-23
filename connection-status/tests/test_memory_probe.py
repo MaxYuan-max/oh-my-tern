@@ -33,9 +33,10 @@ class MemoryAccountingTests(unittest.TestCase):
         sample = probe.container_memory(json.dumps({
             "cgroup_version": 1, "ram_used_bytes": 6 * GiB, "ram_limit_bytes": 8 * GiB,
             "cache_bytes": 2 * GiB, "swap_used_bytes": 77,
-        }), "total_rss {}\ntotal_cache {}\ntotal_swap 123\nhierarchical_memsw_limit {}\n".format(
-            3 * GiB, 2 * GiB, 40 * GiB))
+        }), "total_rss {}\ntotal_cache {}\ntotal_inactive_file {}\ntotal_swap 123\nhierarchical_memsw_limit {}\n".format(
+            3 * GiB, 2 * GiB, GiB, 40 * GiB))
         self.assertEqual(sample["used_bytes"], 6 * GiB)
+        self.assertEqual(sample["working_set_bytes"], 5 * GiB)
         self.assertEqual(sample["total_bytes"], 8 * GiB)
         self.assertEqual(sample["available_bytes"], 2 * GiB)
         self.assertEqual(sample["ratio"], 0.75)
@@ -57,8 +58,21 @@ class MemoryAccountingTests(unittest.TestCase):
             with self.subTest(stat=stat):
                 sample = probe.container_memory(text, stat)
                 self.assertEqual(components(sample), {"used": (6 * GiB, True), "headroom": (2 * GiB, False)})
+                self.assertNotIn("working_set_bytes", sample)
                 self.assertNotIn("swap_used_bytes", sample)
                 self.assertNotIn("swap_total_bytes", sample)
+
+    def test_working_set_uses_only_a_valid_hierarchical_inactive_file_counter(self):
+        text = json.dumps({"cgroup_version": 1, "ram_used_bytes": 6 * GiB, "ram_limit_bytes": 8 * GiB})
+        for stat in (f"inactive_file {GiB}\ntotal_cache {2 * GiB}\n", "total_inactive_file -1\n",
+                     "total_inactive_file unknown\n", f"total_inactive_file {6 * GiB}\n",
+                     f"total_inactive_file {7 * GiB}\n"):
+            with self.subTest(stat=stat):
+                sample = probe.container_memory(text, stat)
+                self.assertNotIn("working_set_bytes", sample)
+                self.assertEqual(sample["used_bytes"], 6 * GiB)
+                self.assertEqual(sample["available_bytes"], 2 * GiB)
+        self.assertEqual(probe.container_memory(text, "total_inactive_file 0\n")["working_set_bytes"], 6 * GiB)
 
     def test_inconsistent_container_snapshots_do_not_invent_a_negative_remainder(self):
         text = json.dumps({"cgroup_version": 1, "ram_used_bytes": 6 * GiB, "ram_limit_bytes": 8 * GiB})

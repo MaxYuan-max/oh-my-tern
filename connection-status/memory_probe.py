@@ -54,7 +54,7 @@ def component(identifier, label, value, included):
 
 
 def container_memory(text, stat_text=None):
-    """Use the helper's effective limit and charged usage, including cache."""
+    """Keep charged usage and report a working-set estimate when possible."""
     reading = json.loads(text)
     if type(reading.get("cgroup_version")) is not int or reading["cgroup_version"] != 1:
         raise ValueError("Unsupported container-usage accounting version")
@@ -66,10 +66,16 @@ def container_memory(text, stat_text=None):
     sample["available_bytes"] = headroom
 
     counters = {}
+    keys = ("total_rss", "total_cache", "total_swap", "total_inactive_file")
     for line in (stat_text or "").splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0] in ("total_rss", "total_cache", "total_swap") and fields[1].isdecimal():
+        if len(fields) == 2 and fields[0] in keys and fields[1].isdecimal():
             counters[fields[0]] = int(fields[1])
+    # Match docker stats on cgroup v1. Charge and memory.stat come from separate
+    # snapshots; when the subtraction isn't credible, leave the estimate absent.
+    inactive_file = counters.get("total_inactive_file")
+    if inactive_file is not None and inactive_file < used:
+        sample["working_set_bytes"] = used - inactive_file
     parts = []
     for key, identifier, label in (("total_rss", "rss", "RSS"), ("total_cache", "cache", "Cache")):
         if key in counters:

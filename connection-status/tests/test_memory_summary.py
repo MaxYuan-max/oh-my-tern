@@ -17,14 +17,12 @@ import unittest
 SOURCE = Path(__file__).resolve().parents[1]
 APP = Path("/Applications/Tern.app/Contents/MacOS/tern")
 TERN = str(APP) if APP.is_file() else shutil.which("tern")
-TEMP_ROOT = Path("/private/var/folders/ls/t88tf_1d0td1vmtfyc5jntt80000gn/T/opencode")
 
 
 @unittest.skipUnless(sys.platform == "darwin" and TERN, "requires macOS Tern")
 class MemorySummaryTests(unittest.TestCase):
     def test_card_rows_match_the_native_memory_panel(self):
-        parent = TEMP_ROOT if TEMP_ROOT.is_dir() else None
-        with TemporaryDirectory(prefix="memory-summary-test-", dir=parent) as directory:
+        with TemporaryDirectory(prefix="memory-summary-test-") as directory:
             root = Path(directory)
             fixture = root / "crates/plugins/fixtures/connection-status"
             fixture.mkdir(parents=True)
@@ -74,19 +72,19 @@ sampleMemory = function(host)
 end
 
 local function __load()
-    local sample = tern.json.decode(tern.fs.read("sample.json"))
-    sample.checked = tern.now()
-    sample.ratio = sample.used_bytes / sample.total_bytes
-    sample.text = string.format("%.0f%%", sample.ratio * 100)
-    return sample
+    return tern.json.decode(tern.fs.read("sample.json"))
+end
+
+local function __write_sample(name, sample)
+    tern.fs.write(__OUTPUT__ .. "/" .. name .. ".json",
+        tern.json.encode({card = sample.card, css = sample.css, text = sample.text, ratio = sample.ratio}))
 end
 
 local function __write(key)
     local sample = memoryReadings[key]
     if not sample or not sample.card then return end
     local state = if memoryProcessesExpanded[key] then "expanded" else "collapsed"
-    tern.fs.write(__OUTPUT__ .. "/" .. key .. "-" .. state .. ".json",
-        tern.json.encode({card = sample.card, css = sample.css}))
+    __write_sample(key .. "-" .. state, sample)
 end
 
 tern.command({id="fixture-write",title="Write fixture cards",run=function()
@@ -104,8 +102,7 @@ tern.command({id="fixture-local",title="Local summary fixture",run=function(cx)
         }
     end
     sample.process_count = 612
-    sample.card, sample.css = memoryCard("local", sample)
-    memoryReadings["local"] = sample
+    memoryReadings["local"] = memorySample("local", sample)
     __fixture_keys["local"] = true
     __fixture_host = nil
     updateHosts(cx)
@@ -125,8 +122,8 @@ local function __remote_summary(cx, key, address, container)
         sample.swap_total_bytes = nil
         sample.breakdown = {
             {id="rss", label="RSS", bytes=2*gib, included=true},
-            {id="cache", label="Cache", bytes=gib, included=true},
-            {id="other", label="Other", bytes=3*gib, included=true},
+            {id="cache", label="Cache", bytes=3*gib, included=true},
+            {id="other", label="Other", bytes=gib, included=true},
             {id="headroom", label="Headroom", bytes=2*gib, included=false},
         }
     else
@@ -143,10 +140,14 @@ local function __remote_summary(cx, key, address, container)
         {pid=2439787, name="python", rss_bytes=362*1048576, path="/usr/bin/python"},
         {pid=3645398, name="pi", rss_bytes=361*1048576, path="/home/user/bin/pi"},
     }
-    sample.ratio = sample.used_bytes / sample.total_bytes
-    sample.text = string.format("%.0f%%", sample.ratio * 100)
-    sample.card, sample.css = memoryCard(key, sample)
-    memoryReadings[key] = sample
+    if container then
+        for i = 4, 20 do
+            sample.processes[i] = {pid=400000 + i, name="worker-" .. tostring(i), rss_bytes=(21 - i)*1048576}
+        end
+        __write_sample("container-fallback", memorySample(key, sample))
+        sample.working_set_bytes = 4 * gib
+    end
+    memoryReadings[key] = memorySample(key, sample)
     __fixture_keys[key] = true
     __fixture_host = {kind="remote", state="connected", name=key, address=address}
     updateHosts(cx)
@@ -273,6 +274,7 @@ end}, {__index=__native.process})}, {__index=__native})
                 return {row["id"]: row for row in document["card"]}
 
             local_rows = rows(local)
+            self.assertEqual(local["text"], "76%")
             self.assertEqual(local_rows["summary"]["label"], "18.2")
             self.assertEqual(local_rows["summary"]["text"], "GB of 24 GB")
             self.assertEqual(local_rows["summary"]["actions"], [{"id": "noop", "label": "5.8 GB available"}])
@@ -313,6 +315,8 @@ end}, {__index=__native.process})}, {__index=__native})
 
             # Remote cards carry the host subtitle and a folded process heading.
             linux_rows = rows(linux)
+            self.assertEqual(linux["text"], "76%")
+            self.assertNotIn("working-set", linux_rows)
             self.assertEqual(linux_rows["subtitle"]["label"], "linux-host")
             self.assertEqual([linux_rows["legend-" + str(i)]["label"] for i in (1, 2)],
                              ["Used", "Free"])
@@ -336,7 +340,21 @@ end}, {__index=__native.process})}, {__index=__native})
             self.assertEqual(container_rows["summary"]["actions"], [{"id": "noop", "label": "2.0 GB headroom"}])
             self.assertEqual([container_rows["legend-" + str(i)]["label"] for i in (1, 2, 3, 4)],
                              ["RSS", "Cache", "Other", "Headroom"])
-            self.assertEqual(rows(container_expanded)["more"]["label"], "还有 106 个进程")
+            self.assertEqual(container["text"], "50%")
+            self.assertEqual(container["ratio"], 0.5)
+            self.assertEqual(container_rows["working-set"], {
+                "id": "working-set", "label": "工作集（估算）", "text": "4.0 GB · 4.0 GB 可用",
+            })
+            self.assertEqual(len(container_expanded["card"]), 32)
+            self.assertEqual([row["id"] for row in container_expanded["card"][-3:]],
+                             ["process-18", "more", "footer"])
+            self.assertEqual(rows(container_expanded)["more"]["label"], "还有 91 个进程")
+
+            container_fallback = json.loads((root / "container-fallback.json").read_text())
+            self.assertEqual(container_fallback["text"], "75%")
+            self.assertEqual(container_fallback["ratio"], 0.75)
+            self.assertEqual(rows(container_fallback)["working-set"]["text"], "—")
+            self.assertEqual(rows(container_fallback)["summary"], container_rows["summary"])
 
             def layout(name):
                 files = list((root / "shots").rglob(name + "-dark.layout.json"))
@@ -475,6 +493,9 @@ end}, {__index=__native.process})}, {__index=__native})
                 badge = row_box(elements, index_of(document, "pressure"))["rect"]
                 self.assertGreaterEqual(badge[1], header[1])
                 self.assertLessEqual(badge[1] + badge[3], header[1] + header[3])
+
+            working_set = row_box(layout("container"), index_of(container, "working-set"))["rect"]
+            self.assertAlmostEqual(working_set[3], 22, delta=1)
 
             # Expanded remote cards are one line per process, and the footer
             # follows the list (and the "more" row when one is present).

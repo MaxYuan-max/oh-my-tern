@@ -1,6 +1,6 @@
 schema = 1
 id = "connection-status"
 name = "连接方式"
-version = "1.16.3"
+version = "1.16.4"
 description = "显示对应主机的连接方式、RTT、内存占用与进程详情；未知时不猜测。"
 window = "window.luau"
