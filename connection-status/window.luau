@@ -49,6 +49,8 @@ if hostConfig then
 				alias = if type(entry.alias) == "string" then entry.alias else "",
 				port = port,
 				endpoint = if type(entry.endpoint) == "string" then entry.endpoint else "",
+				udp_address = if type(entry.udp_forward) == "table" and type(entry.udp_forward.address) == "string"
+					and entry.udp_forward.address ~= "" then entry.udp_forward.address else nil,
 				detail = if type(entry.detail) == "string" and entry.detail ~= "" then entry.detail
 					else "SSH 隧道 → " .. entry.name,
 				tunnel = tunnel,
@@ -64,7 +66,7 @@ end
 
 -- The same machine may already be attached by tunnel name, by 127.0.0.1:port, or by endpoint ID.
 local function sameTarget(address: string, target: any): boolean
-	if address == target.address then
+	if address == target.address or address == target.udp_address then
 		return true
 	end
 	if target.endpoint ~= "" and #address > #target.endpoint and string.sub(address, -#target.endpoint) == target.endpoint then
@@ -232,6 +234,13 @@ local function view(host: any): any
 	elseif way.mode == "direct" then
 		result.mode, result.label, result.tone, result.path = "direct", "UDP直连", "ok", way.addr
 		result.reason = (if way.upgraded then "已从中继升级为原生 UDP 直连 " else "按地址经 UDP 直连 ") .. way.addr
+		for _, target in TUNNEL_HOSTS do
+			if target.udp_address == host.address then
+				result.label = "UDP转发"
+				result.reason = "经 " .. way.addr .. " 转发 UDP 数据，不经 SSH/TCP。"
+				break
+			end
+		end
 	elseif way.mode == "relay" then
 		result.mode, result.label, result.tone, result.path = "relay", "中继", "warn", way.relay
 		result.reason = "经中继 " .. way.relay
@@ -1234,6 +1243,9 @@ local function connectTarget(cx: any, target: any, checked: boolean)
 	local relayed = {}
 	local pending = nil
 	for _, host in attachedTo(cx, target) do
+		if host.address == target.udp_address then
+			continue -- Legacy fallback must not select a failed UDP forward or its relay path.
+		end
 		if onRelay(host) then
 			table.insert(relayed, host)
 		elseif host.state == "connected" then
@@ -1262,14 +1274,23 @@ local function connectTarget(cx: any, target: any, checked: boolean)
 		return
 	end
 	if #relayed == 0 then
-		if pending then
-			-- Attached but not connected (reconnecting, failed, …): show it as it is.
+		if pending and pending.state ~= "failed" then
+			-- An active attempt is already dialing; only show it.
 			hostOp(cx, target.name .. " · " .. view(pending).label, function()
 				cx.hosts:switch(pending.id)
 			end)
-		else
-			dial(cx, target, target.address, {})
+			return
 		end
+		if pending then
+			-- `hosts:add` reuses a failed attachment without dialing again. Forget only
+			-- that failed attachment first; the remote daemon and its programs stay alive.
+			if not hostOp(cx, target.name .. " 无法重置失败连接", function()
+				cx.hosts:disconnect(pending.id)
+			end) then
+				return
+			end
+		end
+		dial(cx, target, target.address, {})
 		return
 	end
 	-- Tern keeps one host per address, so when the named tunnel entry itself fell back to the relay,
@@ -1285,6 +1306,82 @@ local function connectTarget(cx: any, target: any, checked: boolean)
 		return
 	end
 	dial(cx, target, address, relayed)
+end
+
+local udpPreparing: { [string]: boolean } = {}
+
+local function connectPreferred(cx: any, target: any)
+	local address = target.udp_address
+	if not address then
+		connectTarget(cx, target, false)
+		return
+	end
+	local endpoint = string.match(address, "@(.+)$") or address
+	local ip, port = string.match(endpoint, "^([%d.]+):(%d+)$")
+	local mapped = if ip and port then "[::ffff:" .. ip .. "]:" .. port else nil
+	local function verified(info: any): boolean
+		return info ~= nil and info.mode == "direct" and (info.path == endpoint or info.path == mapped)
+	end
+	local function finish(doneCx: any, id: number): boolean
+		if not hostOp(doneCx, target.name .. " 无法切换到 UDP", function() doneCx.hosts:switch(id) end) then
+			return false
+		end
+		for _, other in attachedTo(doneCx, target) do
+			if other.id ~= id and (other.address == target.address or other.address == target.fallback) then
+				hostOp(doneCx, target.name .. " 无法收起旧连接", function() doneCx.hosts:disconnect(other.id) end)
+			end
+		end
+		return true
+	end
+	local alreadyAttached = false
+	for _, host in attachedTo(cx, target) do
+		if host.address == address then
+			alreadyAttached = true
+			if verified(view(host)) then
+				finish(cx, host.id)
+				return
+			end
+		end
+	end
+	if udpPreparing[target.name] then
+		cx:toast("info", "仍在检查 " .. target.name .. " 的 UDP 路径")
+		return
+	end
+	local function fallback(currentCx: any, why: string)
+		udpPreparing[target.name] = nil
+		currentCx:toast("info", target.name .. " 的 UDP 路径未通过，改用备用连接", why)
+		connectTarget(currentCx, target, false)
+	end
+	udpPreparing[target.name] = true
+	cx:toast("info", "正在验证 " .. target.name .. " 的 UDP 转发", "保留现有连接，验证后才切换")
+	local ok, failure = pcall(function()
+		tern.process.run({ "/usr/bin/python3", tern.plugin.dir .. "/prepare_udp.py", target.name }, { timeout_ms = 45000 }, function(process, readyCx)
+			if not readyCx then udpPreparing[target.name] = nil; return end
+			if process.status ~= 0 then
+				fallback(readyCx, string.sub(process.stderr or "", 1, 700))
+				return
+			end
+			readyCx.hosts:add(address):next(function(added, err, addedCx)
+				if not addedCx then udpPreparing[target.name] = nil; return end
+				if not added or err then
+					fallback(addedCx, tostring(err or "没有返回主机"))
+					return
+				end
+				awaitWay(added.id, 5, function(info, doneCx)
+					udpPreparing[target.name] = nil
+					if verified(info) and finish(doneCx, added.id) then
+						doneCx:toast("success", target.name .. " · UDP转发", "SSH 隧道仍可用作备用")
+					else
+						if not alreadyAttached and added.address == address then
+							hostOp(doneCx, target.name .. " 无法收起未验证的连接", function() doneCx.hosts:disconnect(added.id) end)
+						end
+						fallback(doneCx, "新连接未确认走指定的 UDP 地址")
+					end
+				end)
+			end)
+		end)
+	end)
+	if not ok then fallback(cx, tostring(failure)) end
 end
 
 tern.command({
@@ -1313,9 +1410,10 @@ tern.command({
 					pending = pending or host
 				end
 			end
-			local state = if connected then brief(view(connected)) .. " · 选择后切换"
+			local state = if target.udp_address then "优先 UDP 转发 · SSH 隧道备用"
+				elseif connected then brief(view(connected)) .. " · 选择后切换"
 				elseif relayed then "中继 · " .. latency(relayed) .. " · 选择后" .. (if target.tunnel then "检查隧道，换到隧道并断开中继" else "直连并断开中继")
-				elseif pending then view(pending).label .. " · 选择后切换"
+				elseif pending then view(pending).label .. (if pending.state == "failed" then " · 选择后重连" else " · 选择后切换")
 				elseif target.tunnel then "未连接 · 选择后检查隧道并连接"
 				else "未连接 · 选择后直连"
 			-- Way and RTT first: the picker cuts the dim detail off at the row's end.
@@ -1350,7 +1448,7 @@ tern.command({
 			-- Decide on a fresh reading, not the list's snapshot.
 			afterReading(function(freshCx)
 				if freshCx then
-					connectTarget(freshCx, target, false)
+					connectPreferred(freshCx, target)
 				end
 			end)
 		end)

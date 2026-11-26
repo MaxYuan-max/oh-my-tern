@@ -37,6 +37,12 @@
         "files": "container-box-ssh-udp",
         "doctor": "user@container-box.localhost:28377"
       },
+      "udp_forward": {
+        "address": "user@192.0.2.15:7709",
+        "ssh": "build-box",
+        "host": "build-box",
+        "identity": "user@container-box"
+      },
       "memory": { "ssh": "container-box", "kind": "container" }
     }
   ]
